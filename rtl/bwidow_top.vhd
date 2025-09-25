@@ -81,6 +81,10 @@ entity BWIDOW_TOP is
     dn_data           : in std_logic_vector(7 downto 0);
     dn_wr					: in std_logic;
     
+	 VECTOR_X          : out std_logic_vector(9 downto 0);
+	 VECTOR_Y          : out std_logic_vector(9 downto 0);
+	 VECTOR_Z          : out std_logic_vector(3 downto 0);
+	 
     VIDEO_R_OUT       : out   std_logic_vector(3 downto 0);
     VIDEO_G_OUT       : out   std_logic_vector(3 downto 0);
     VIDEO_B_OUT       : out   std_logic_vector(3 downto 0);
@@ -202,6 +206,10 @@ begin
 	);
 	
 
+  VECTOR_X <= not x_vector(9) & x_vector(8 downto 0); -- core is returning 10-bit signed
+  VECTOR_Y <= not y_vector(9) & y_vector(8 downto 0);
+  VECTOR_Z <= z_vector(7 downto 4); -- black widow is color, uses z as intensity
+	
   u_DW : entity work.BWIDOW_DW 
     port map (
       RESET           =>    reset_6,

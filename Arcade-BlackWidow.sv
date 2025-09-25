@@ -212,6 +212,7 @@ localparam CONF_STR = {
 	"R0,Reset;",
 	"J1,Fire Right,Fire Left,Fire Down,Fire Up,Start 1,Start 2,Coin,Pause;",
 	"jn,A,B,X,Y,Start,Select,R,L;",
+	"DEFMRA,/_Arcade/Black Widow.mra;", // causes the HPC side to reload the roms for us
 	"V,v2.00.",`BUILD_DATE
 };
 
@@ -479,6 +480,8 @@ always @(posedge clk_50) begin
        ce_pix <= !ce_pix;
 end
 
+`ifndef MISTER_VECTOR
+
 arcade_video #(640,12) arcade_video
 (
         .*,
@@ -495,12 +498,44 @@ arcade_video #(640,12) arcade_video
         .fx(0)
 );
 
+`endif
+
 wire reset = (RESET | status[0] |  buttons[1] | rom_download);
 wire [7:0] audio;
 assign AUDIO_L = {audio, audio};
 assign AUDIO_R = AUDIO_L;
 assign AUDIO_S = 0;
 wire vgade;
+
+
+`ifdef MISTER_VECTOR
+
+  // game is outputting 10bit dac
+  // VGA_RGB internal ports are 8
+  // but hardware DAC is only the 6 lsb pins [5:0]
+
+// input
+// 10-bit unsigned inputs from the game core
+wire [9:0] x_dac10;
+wire [9:0] y_dac10;
+wire [3:0] z_dac4;
+
+// output
+// 6-bit r2r dac, but pwm'd to 10
+wire [5:0] z6 = (z_dac4 == 0) ? 6'h3f : 6'h00;  // binary, on/off for scope
+wire [5:0] x6, y6;
+sd10to6 sd_x(.clk(CLK_50M), .in(x_dac10), .out(x6));
+sd10to6 sd_y(.clk(CLK_50M), .in(y_dac10), .out(y6));
+
+// drive 6-bit ladder every clk
+always @(posedge CLK_50M) begin
+    VGA_B <= x6;  // X on Blue
+    VGA_R <= y6;  // Y on Red
+    VGA_G <= z6;  // intensity on Green
+end
+
+
+`endif
 
 BWIDOW_TOP BWIDOW_TOP
 (
@@ -514,9 +549,16 @@ BWIDOW_TOP BWIDOW_TOP
 	.dn_wr(ioctl_wr & rom_download),
 	.dn_data(ioctl_dout),
 
+// vector outs	
+	.VECTOR_X( x_dac10 ),
+	.VECTOR_Y( y_dac10 ),
+	.VECTOR_Z( z_dac4 ),
+
+// raster outs	
 	.VIDEO_R_OUT(r),
 	.VIDEO_G_OUT(g),
 	.VIDEO_B_OUT(b),
+	
 	.HSYNC_OUT(hs),
 	.VSYNC_OUT(vs),
 	.VGA_DE(vgade),
@@ -583,3 +625,34 @@ hiscore #(
 );
 
 endmodule
+
+// First-order sigma-delta (10-bit -> 6-bit)
+module sd10to6 (
+  input  wire       clk,
+  input  wire [9:0] in,   // 0..1023 (unsigned)
+  output reg  [5:0] out   // 0..63   (to 6-bit R-2R ladder)
+);
+  // Split input into coarse MSBs and 4-bit fraction
+  wire [5:0] coarse = in[9:4];
+  wire [3:0] frac   = in[3:0];
+
+  // Residual accumulator (0..15)
+  reg  [3:0] acc = 4'd0;
+
+  // Current-cycle sum & carry (combinational)
+  wire [4:0] s     = acc + frac;  // 0..31
+  wire       carry = s[4];        // >=16?
+  wire [3:0] res   = s[3:0];      // s - 16 if carry, else s
+
+  always @(posedge clk) begin
+    // Emit coarse or coarse+1 this tick (with saturation)
+    if (carry)
+      out <= (coarse == 6'd63) ? 6'd63 : (coarse + 6'd1);
+    else
+      out <= coarse;
+
+    // Update residual for next tick
+    acc <= res;
+  end
+endmodule
+
